@@ -100,5 +100,26 @@ Each street lamp becomes a **LiFi node** capable of sending and receiving encode
 
 ---
 
-## 🪴 Repository Structure (Planned)
+## Important Technical Notes
+
+1. Message Timing & Reliability
+
+A potential issue in LiFi/IR transmission is that if a node is busy or delayed, it may miss part of a message (header or data).
+In a small-scale demo, this is unlikely to occur, but in real deployments, this can be mitigated by:
+
+Sending data in small bursts or bytes
+
+Using start/stop markers to frame each message
+
+Maintaining precise transmission timing to ensure no bits are lost
+
+2. ACKs / Retransmission
+
+Acknowledgments or retransmission mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths.
+For larger or more critical networks, ACK-based delivery confirmation can be added later if required.
+
+3. Security
+
+Security features (encryption, authentication) are not necessary for the disaster-response demo, since the system operates in a controlled, emergency-use environment.
+For real-world deployment, lightweight encryption and message verification can be implemented to prevent spoofing or unauthorized access.
 
