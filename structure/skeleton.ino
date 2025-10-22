@@ -24,6 +24,10 @@
 // Prevents accidental spam and allows cache to rotate
 const unsigned long SOS_COOLDOWN = 180000;
 
+// LiFi rebroadcast interval for phone receivers (1 minute = 60,000 milliseconds)
+// Ensures people arriving later can still receive the message
+const unsigned long LIFI_REBROADCAST_INTERVAL = 60000;
+
 // Cache size for message deduplication (number of recent messages remembered)
 #define CACHE_SIZE   3
 
@@ -57,6 +61,14 @@ unsigned long lastSOSTime = 0;
 
 // Track button state for edge detection (prevents debounce issues)
 bool lastButtonState = HIGH;  // HIGH = not pressed (INPUT_PULLUP)
+
+// ==================== LIFI REBROADCAST TRACKING ====================
+
+// Store the latest message to rebroadcast to phones via LiFi
+String latestLiFiMessage = "";
+
+// Track last time LiFi broadcast was sent
+unsigned long lastLiFiBroadcastTime = 0;
 
 // ==================== UTILITY FUNCTIONS ====================
 
@@ -138,7 +150,7 @@ bool isNew(String src, uint16_t hash){
  *   Burst 2: [message bytes][END_MARKER(0xFD)]
  */
 void irSend(String header, String message){
-  // Burst 1: Send header
+  // Burst 1: Send header (IR mesh communication)
   Serial.print("TX Burst 1 (Header): "); 
   Serial.println(header);
   digitalWrite(IR_TX_PIN, HIGH);
@@ -146,11 +158,27 @@ void irSend(String header, String message){
   digitalWrite(IR_TX_PIN, LOW);
   delay(10);  // Inter-burst gap
   
-  // Burst 2: Send message
+  // Burst 2: Send message (IR mesh communication)
   Serial.print("TX Burst 2 (Message): "); 
   Serial.println(message);
   digitalWrite(LAMP_LIGHT_PIN, HIGH);
   delay(25);
+  digitalWrite(LAMP_LIGHT_PIN, LOW);
+}
+
+/*
+ * LiFi Broadcast to Phones - Separate from IR Mesh
+ * Transmits message via lamp light for phone receivers
+ * This is separate from node-to-node IR communication
+ */
+void lifiTransmit(String message){
+  Serial.print("LiFi Broadcast: "); 
+  Serial.println(message);
+  
+  // Placeholder: Flash lamp to indicate broadcast
+  // Real implementation: Modulate lamp at kHz frequency with encoded data
+  digitalWrite(LAMP_LIGHT_PIN, HIGH);
+  delay(100);  // Longer pulse to distinguish from IR forwarding
   digitalWrite(LAMP_LIGHT_PIN, LOW);
 }
 
@@ -200,6 +228,7 @@ bool irReceive(String &header, String &message){
 /*
  * Generate SOS Emergency Message
  * Creates and broadcasts emergency alert with pre-computed hash
+ * Also updates LiFi broadcast message for phone receivers
  */
 void generateSOS(){
   String msg = SOS_MESSAGE;  // "HELP!"
@@ -211,7 +240,12 @@ void generateSOS(){
   String header = String(NODE_ID) + BROADCAST_ID + "3" + String(hashStr);
 
   isNew(NODE_ID, h);  // Add to cache to prevent re-forwarding own SOS
-  irSend(header, msg);
+  irSend(header, msg);  // Send via IR mesh to other nodes
+
+  // Update LiFi broadcast message for phones
+  latestLiFiMessage = msg;
+  lastLiFiBroadcastTime = millis();
+  lifiTransmit(msg);  // Immediately broadcast to phones
 
   // Visual feedback
   digitalWrite(LED_STATUS, HIGH);
@@ -225,8 +259,9 @@ void generateSOS(){
  * Core mesh networking function:
  *   1. Validates header format
  *   2. Verifies message integrity (hash check)
- *   3. Deduplicates and forwards new messages with random backoff
+ *   3. Deduplicates and forwards new messages via IR mesh
  *   4. Processes messages addressed to this node
+ *   5. Updates LiFi broadcast message if addressed to this node
  * 
  * Header Format (13 chars): [src(4)][dst(4)][type(1)][hash(4)]
  */
@@ -253,7 +288,7 @@ void forwardPacket(String header, String message){
     return;  // Exit early, don't process bad data
   }
 
-  // Message integrity verified, now forward if new
+  // Message integrity verified, now forward if new via IR mesh
   if(isNew(src, receivedHash)){
     // Optional: Uncomment next line if collision issues observed
     // delay(random(10, 100));  // Random backoff reduces collision probability
@@ -261,18 +296,23 @@ void forwardPacket(String header, String message){
     irSend(header, message);
 
     digitalWrite(LED_STATUS, HIGH);
-    digitalWrite(LAMP_LIGHT_PIN, HIGH);
     delay(50);
     digitalWrite(LED_STATUS, LOW);
-    digitalWrite(LAMP_LIGHT_PIN, LOW);
   }
 
-  // Process if for this node
+  // Process if for this node or broadcast
   if(dst == NODE_ID || dst == BROADCAST_ID){
     Serial.print("From "); 
     Serial.print(src);
     Serial.print(": "); 
     Serial.println(message);
+    
+    // Update latest message for LiFi rebroadcast to phones
+    latestLiFiMessage = message;
+    lastLiFiBroadcastTime = millis();  // Reset rebroadcast timer
+    
+    // Immediately broadcast to phones via LiFi
+    lifiTransmit(message);
   }
 }
 
@@ -323,10 +363,20 @@ void loop(){
   
   lastButtonState = currentButtonState;  // Remember state for next loop
 
-  // Check for incoming messages
+  // Check for incoming messages via IR mesh
   String header, message;
   if(irReceive(header, message)){
     forwardPacket(header, message);
+  }
+
+  // Periodic LiFi rebroadcast for phone receivers
+  // Ensures people arriving later can still receive the message
+  if(latestLiFiMessage != "" && 
+     (millis() - lastLiFiBroadcastTime >= LIFI_REBROADCAST_INTERVAL)){
+    
+    Serial.println("Rebroadcasting to phones...");
+    lifiTransmit(latestLiFiMessage);
+    lastLiFiBroadcastTime = millis();
   }
 
   delay(10);
