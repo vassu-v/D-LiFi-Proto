@@ -10,6 +10,11 @@
 // Reserved ID for broadcast messages (all nodes receive)
 #define BROADCAST_ID "FFFF"
 
+// Headquarters/Base Station ID (SOS messages are sent here)
+// This is the central command station that monitors all alerts
+// Using "000h" pattern: 3 digits + 'h' for headquarters
+#define HQ_ID        "000h"
+
 // ==================== PIN ASSIGNMENTS ====================
 
 #define SOS_PIN      D3  // Pushbutton for SOS (INPUT_PULLUP, active LOW)
@@ -227,8 +232,12 @@ bool irReceive(String &header, String &message){
 
 /*
  * Generate SOS Emergency Message
- * Creates and broadcasts emergency alert with pre-computed hash
- * Also updates LiFi broadcast message for phone receivers
+ * Creates and sends emergency alert to HQ with pre-computed hash
+ * Also updates LiFi broadcast message for local phone receivers
+ * 
+ * SOS Flow:
+ *   1. Send to HQ via mesh (for central monitoring)
+ *   2. Broadcast to local phones via LiFi (for nearby people)
  */
 void generateSOS(){
   String msg = SOS_MESSAGE;  // "HELP!"
@@ -237,15 +246,18 @@ void generateSOS(){
   char hashStr[5];
   sprintf(hashStr, "%04X", h);
 
-  String header = String(NODE_ID) + BROADCAST_ID + "3" + String(hashStr);
+  // Send SOS to HQ (not broadcast - targeted delivery)
+  String header = String(NODE_ID) + HQ_ID + "3" + String(hashStr);
+  //                                 ^^^^^
+  //                                 Destination: HQ only
 
   isNew(NODE_ID, h);  // Add to cache to prevent re-forwarding own SOS
-  irSend(header, msg);  // Send via IR mesh to other nodes
+  irSend(header, msg);  // Send via IR mesh to HQ
 
-  // Update LiFi broadcast message for phones
+  // Update LiFi broadcast message for local phones
   latestLiFiMessage = msg;
   lastLiFiBroadcastTime = millis();
-  lifiTransmit(msg);  // Immediately broadcast to phones
+  lifiTransmit(msg);  // Immediately broadcast to nearby phones
 
   // Visual feedback
   digitalWrite(LED_STATUS, HIGH);
@@ -260,10 +272,18 @@ void generateSOS(){
  *   1. Validates header format
  *   2. Verifies message integrity (hash check)
  *   3. Deduplicates and forwards new messages via IR mesh
- *   4. Processes messages addressed to this node
- *   5. Updates LiFi broadcast message if addressed to this node
+ *   4. Processes messages addressed to this node or broadcast
+ *   5. Updates LiFi broadcast message if relevant to local area
  * 
  * Header Format (13 chars): [src(4)][dst(4)][type(1)][hash(4)]
+ * 
+ * Message Types (for future expansion):
+ *   '1' - General data message
+ *   '2' - Command/control message
+ *   '3' - SOS emergency alert
+ *   '4' - Status update
+ *   '5' - Sensor data
+ *   (More types can be added as needed)
  */
 void forwardPacket(String header, String message){
   // Validate header
@@ -289,6 +309,7 @@ void forwardPacket(String header, String message){
   }
 
   // Message integrity verified, now forward if new via IR mesh
+  // All nodes forward messages to help route to destination (mesh behavior)
   if(isNew(src, receivedHash)){
     // Optional: Uncomment next line if collision issues observed
     // delay(random(10, 100));  // Random backoff reduces collision probability
@@ -300,7 +321,7 @@ void forwardPacket(String header, String message){
     digitalWrite(LED_STATUS, LOW);
   }
 
-  // Process if for this node or broadcast
+  // Process if message is for this node or broadcast
   if(dst == NODE_ID || dst == BROADCAST_ID){
     Serial.print("From "); 
     Serial.print(src);
@@ -313,6 +334,14 @@ void forwardPacket(String header, String message){
     
     // Immediately broadcast to phones via LiFi
     lifiTransmit(message);
+  }
+  
+  // Special handling: If this node IS the HQ, process SOS messages
+  if(NODE_ID == HQ_ID && dst == HQ_ID && type == '3'){
+    Serial.println(">>> HQ: SOS ALERT RECEIVED <<<");
+    Serial.print(">>> From Node: "); Serial.println(src);
+    Serial.print(">>> Message: "); Serial.println(message);
+    // HQ can add additional processing here (log, alarm, relay to emergency services)
   }
 }
 
