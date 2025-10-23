@@ -123,3 +123,7 @@ For larger or more critical networks, ACK-based delivery confirmation can be add
 Security features (encryption, authentication) are not necessary for the disaster-response demo, since the system operates in a controlled, emergency-use environment.
 For real-world deployment, lightweight encryption and message verification can be implemented to prevent spoofing or unauthorized access.
 
+4. Memory Optimization (For Production)
+
+Current firmware uses Arduino String objects for clarity during prototyping.
+In long-term or low-RAM deployments, replace all dynamic String usage with fixed-size char[] C-strings and safe functions (snprintf, strcmp, etc.) to prevent heap fragmentation and improve determinism.
