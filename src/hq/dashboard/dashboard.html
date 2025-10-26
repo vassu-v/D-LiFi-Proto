@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HQ Dashboard - LiFi Mesh</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0e1a;
+            color: #e0e7ff;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            padding: 1rem 2rem;
+            border-bottom: 3px solid #6366f1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            color: #818cf8;
+            font-weight: 700;
+        }
+        
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(99, 102, 241, 0.1);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            border: 1px solid #6366f1;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ef4444;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-dot.connected {
+            background: #22c55e;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr 350px;
+            height: calc(100vh - 70px);
+            gap: 1rem;
+            padding: 1rem;
+        }
+        
+        .panel {
+            background: #1e1b4b;
+            border-radius: 16px;
+            padding: 1.5rem;
+            overflow-y: auto;
+            border: 1px solid #312e81;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        
+        .panel h2 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: #818cf8;
+            border-bottom: 2px solid #6366f1;
+            padding-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #312e81 0%, #1e1b4b 100%);
+            padding: 1rem;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid #6366f1;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #818cf8;
+        }
+        
+        .stat-label {
+            font-size: 0.85rem;
+            color: #a5b4fc;
+            margin-top: 0.25rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        label {
+            display: block;
+            font-size: 0.9rem;
+            color: #a5b4fc;
+            margin-bottom: 0.5rem;
+        }
+        
+        select, input, textarea {
+            width: 100%;
+            background: #312e81;
+            border: 1px solid #6366f1;
+            border-radius: 8px;
+            padding: 0.75rem;
+            color: #e0e7ff;
+            font-family: inherit;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        button {
+            width: 100%;
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #4f46e5;
+            transform: translateY(-1px);
+        }
+        
+        button.connect-btn {
+            background: #22c55e;
+            margin-bottom: 1.5rem;
+        }
+        
+        button.connect-btn.connected {
+            background: #ef4444;
+        }
+        
+        .message-item {
+            background: #312e81;
+            padding: 1rem;
+            border-radius: 12px;
+            margin-bottom: 0.75rem;
+            border-left: 4px solid #6366f1;
+            transition: transform 0.2s;
+        }
+        
+        .message-item:hover {
+            transform: translateX(4px);
+        }
+        
+        .message-item.sos {
+            border-left-color: #ef4444;
+            background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+        }
+        
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        
+        .message-sender {
+            font-weight: 600;
+            color: #818cf8;
+        }
+        
+        .message-type {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            background: #6366f1;
+            font-weight: 600;
+        }
+        
+        .message-type.sos {
+            background: #ef4444;
+        }
+        
+        .message-content {
+            color: #e0e7ff;
+            margin-bottom: 0.5rem;
+        }
+        
+        .message-time {
+            font-size: 0.75rem;
+            color: #a5b4fc;
+        }
+        
+        #map {
+            height: 100%;
+            border-radius: 12px;
+            border: 2px solid #312e81;
+        }
+        
+        .sos-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+            border: 3px solid #ef4444;
+            padding: 2rem;
+            border-radius: 16px;
+            z-index: 1000;
+            min-width: 400px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            transition: transform 0.3s;
+        }
+        
+        .sos-modal.show {
+            transform: translate(-50%, -50%) scale(1);
+            animation: shake 0.5s;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            25% { transform: translate(-48%, -50%) scale(1); }
+            75% { transform: translate(-52%, -50%) scale(1); }
+        }
+        
+        .sos-modal h3 {
+            color: #fca5a5;
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+        }
+        
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 999;
+            display: none;
+        }
+        
+        .overlay.show {
+            display: block;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1e1b4b;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #6366f1;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚨 HQ Dashboard - LiFi Mesh Network</h1>
+        <div class="status-badge">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+    </div>
+    
+    <div class="container">
+        <!-- Left: Controls -->
+        <div class="panel">
+            <h2>📡 Connection</h2>
+            <button class="connect-btn" id="connectBtn" onclick="toggleConnection()">
+                Connect Arduino
+            </button>
+            
+            <h2>📊 Statistics</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="statNodes">0</div>
+                    <div class="stat-label">Nodes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statMessages">0</div>
+                    <div class="stat-label">Messages</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statSOS">0</div>
+                    <div class="stat-label">SOS Alerts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statActive">0</div>
+                    <div class="stat-label">Active</div>
+                </div>
+            </div>
+            
+            <h2>📤 Send Message</h2>
+            <form onsubmit="sendMessage(event)">
+                <div class="form-group">
+                    <label>Message Type</label>
+                    <select id="msgType" onchange="updateDestination()">
+                        <option value="1">Type 1: Broadcast (All Lamps)</option>
+                        <option value="2">Type 2: Targeted (Specific Lamp)</option>
+                        <option value="4">Type 4: Message (Node)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" id="destGroup" style="display:none;">
+                    <label>Destination Node ID</label>
+                    <input type="text" id="destination" placeholder="e.g., 102a" maxlength="4">
+                </div>
+                
+                <div class="form-group">
+                    <label>Message Content</label>
+                    <textarea id="content" placeholder="Enter message..." required></textarea>
+                </div>
+                
+                <button type="submit">Send Message</button>
+            </form>
+        </div>
+        
+        <!-- Center: Map -->
+        <div class="panel">
+            <h2>🗺️ Network Map</h2>
+            <div id="map"></div>
+        </div>
+        
+        <!-- Right: Messages -->
+        <div class="panel">
+            <h2>💬 Recent Messages</h2>
+            <div id="messagesFeed"></div>
+        </div>
+    </div>
+    
+    <!-- SOS Alert Modal -->
+    <div class="overlay" id="overlay" onclick="closeSOS()"></div>
+    <div class="sos-modal" id="sosModal">
+        <h3>🚨 SOS ALERT</h3>
+        <p id="sosContent" style="line-height: 1.6;"></p>
+        <button onclick="closeSOS()" style="margin-top: 1rem;">Acknowledge</button>
+    </div>
+    
+    <script>
+        const socket = io();
+        let isConnected = false;
+        let map = null;
+        let markers = {};
+        
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([22.5726, 88.3639], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+        }
+        
+        // Toggle destination field
+        function updateDestination() {
+            const type = document.getElementById('msgType').value;
+            const destGroup = document.getElementById('destGroup');
+            const destInput = document.getElementById('destination');
+            
+            if (type === '2' || type === '4') {
+                destGroup.style.display = 'block';
+                destInput.required = true;
+            } else {
+                destGroup.style.display = 'none';
+                destInput.required = false;
+            }
+        }
+        
+        // Toggle Arduino connection
+        function toggleConnection() {
+            if (isConnected) {
+                socket.emit('disconnect_arduino');
+            } else {
+                socket.emit('connect_arduino', {});
+            }
+        }
+        
+        // Send message
+        function sendMessage(e) {
+            e.preventDefault();
+            
+            const type = document.getElementById('msgType').value;
+            const content = document.getElementById('content').value;
+            let destination = 'FFFF';
+            
+            if (type === '2' || type === '4') {
+                destination = document.getElementById('destination').value;
+                if (destination.length !== 4) {
+                    alert('Destination must be 4 characters!');
+                    return;
+                }
+            }
+            
+            socket.emit('send_message', {
+                destination: destination,
+                type: type,
+                content: content
+            });
+            
+            document.getElementById('content').value = '';
+            document.getElementById('destination').value = '';
+        }
+        
+        // Add message to feed
+        function addMessage(msg) {
+            const feed = document.getElementById('messagesFeed');
+            const item = document.createElement('div');
+            item.className = 'message-item' + (msg.is_sos ? ' sos' : '');
+            
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            
+            item.innerHTML = `
+                <div class="message-header">
+                    <span class="message-sender">${msg.sender_name || msg.sender_id}</span>
+                    <span class="message-type ${msg.is_sos ? 'sos' : ''}">${msg.type_name}</span>
+                </div>
+                <div class="message-content">${msg.content}</div>
+                <div class="message-time">${time}</div>
+            `;
+            
+            feed.insertBefore(item, feed.firstChild);
+            
+            // Keep only last 20
+            while (feed.children.length > 20) {
+                feed.removeChild(feed.lastChild);
+            }
+        }
+        
+        // Show SOS alert
+        function showSOS(data) {
+            const modal = document.getElementById('sosModal');
+            const overlay = document.getElementById('overlay');
+            const content = document.getElementById('sosContent');
+            
+            content.innerHTML = `
+                <strong>From:</strong> ${data.node_name} (${data.node_id})<br>
+                <strong>Message:</strong> ${data.content}<br>
+                <strong>Time:</strong> ${new Date().toLocaleTimeString()}
+            `;
+            
+            modal.classList.add('show');
+            overlay.classList.add('show');
+            
+            // Alert sound
+            const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwPUKnk8LNgGgU7k9n0yHMpBSh+zPLaizsKGGS56+mjUBELTKXh8bllHAU2jdXzzn0vBSqAzvLaizsKGGS56+mjUBELTKXh8bllHAU2jdXzzn0vBSh+zPLaizsKGGS56+mjUBELTKXh8bllHAU2jdXzzn0vBQ==');
+            beep.play().catch(() => {});
+        }
+        
+        function closeSOS() {
+            document.getElementById('sosModal').classList.remove('show');
+            document.getElementById('overlay').classList.remove('show');
+        }
+        
+        // Update node marker
+        function updateNodeMarker(node) {
+            if (!map || !node.latitude || !node.longitude) return;
+            
+            const color = node.status === 'sos' ? '#ef4444' : 
+                         node.status === 'active' ? '#22c55e' : '#64748b';
+            
+            const icon = L.divIcon({
+                className: 'custom-marker',
+                html: `<div style="background: ${color}; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`
+            });
+            
+            if (markers[node.id]) {
+                markers[node.id].setLatLng([node.latitude, node.longitude]);
+                markers[node.id].setIcon(icon);
+            } else {
+                markers[node.id] = L.marker([node.latitude, node.longitude], { icon })
+                    .bindPopup(`<b>${node.name}</b><br>ID: ${node.id}<br>Status: ${node.status}`)
+                    .addTo(map);
+            }
+        }
+        
+        // Load stats
+        function loadStats() {
+            fetch('/api/stats')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('statNodes').textContent = data.total_nodes;
+                    document.getElementById('statMessages').textContent = data.total_messages;
+                    document.getElementById('statSOS').textContent = data.sos_count;
+                    document.getElementById('statActive').textContent = data.active_nodes;
+                });
+        }
+        
+        // Load messages
+        function loadMessages() {
+            fetch('/api/messages?limit=20')
+                .then(r => r.json())
+                .then(messages => {
+                    messages.reverse().forEach(msg => addMessage(msg));
+                });
+        }
+        
+        // Load nodes
+        function loadNodes() {
+            fetch('/api/nodes')
+                .then(r => r.json())
+                .then(nodes => {
+                    nodes.forEach(node => updateNodeMarker(node));
+                });
+        }
+        
+        // WebSocket handlers
+        socket.on('status', (data) => {
+            isConnected = data.connected;
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const btn = document.getElementById('connectBtn');
+            
+            if (isConnected) {
+                dot.classList.add('connected');
+                text.textContent = 'Arduino Connected';
+                btn.textContent = 'Disconnect Arduino';
+                btn.classList.add('connected');
+            } else {
+                dot.classList.remove('connected');
+                text.textContent = 'Arduino Disconnected';
+                btn.textContent = 'Connect Arduino';
+                btn.classList.remove('connected');
+            }
+        });
+        
+        socket.on('arduino_status', (data) => {
+            if (data.status === 'failed') {
+                alert('Failed to connect to Arduino. Check USB connection.');
+            }
+        });
+        
+        socket.on('new_message', (msg) => {
+            addMessage(msg);
+            loadStats();
+            loadNodes();
+        });
+        
+        socket.on('sos_alert', (data) => {
+            showSOS(data);
+        });
+        
+        socket.on('send_result', (data) => {
+            if (!data.success) {
+                alert('Failed to send: ' + data.error);
+            }
+        });
+        
+        // Initialize
+        window.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            loadStats();
+            loadMessages();
+            loadNodes();
+            setInterval(loadStats, 5000);
+        });
+    </script>
+</body>
+</html>
