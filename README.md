@@ -90,10 +90,8 @@ Each street lamp becomes a **LiFi node** capable of sending and receiving encode
 | Task | Description | Priority |
 |------|--------------|-----------|
 | 🧠 Real LiFi Integration (IR Layer) | Replace IR placeholders with actual LiFi/IR hardware drivers using proper modulation and framing. | High |
-| 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | High |
-| 🖥️ HQ Software / Dashboard | Build HQ node logging and visualization software (serial + GUI) for message and alert tracking. | Medium |
-| 🔧 Modular Refactor | Split current monolithic code into per-module files (`ir_comm.cpp`, `cache.cpp`, etc.) under `/structure`. | Medium |
-| 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | Medium |
+| 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | Medium |
+| 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | High |
 | ⚙️ Simulation Mode | Add serial or Wokwi simulation to test message propagation without hardware. | Low |
 | 🔐 Lightweight Security Layer | Add checksum or lightweight encryption for real-world deployments. | Low |
 | 📖 Extended Documentation | Add diagrams, wiring schematics, and setup notes under `/hardware` and `/docs`. | Medium |
