@@ -42,31 +42,52 @@ inline bool isNew(String src, uint16_t hash){
 // ==================== IR COMMUNICATION FUNCTIONS ====================
 
 /*
- * IR Transmission (HQ to Mesh)
- * Sends header and message via IR in two bursts
+ * IR Transmission (Node to Node Mesh)
+ * Sends header (and optional message) via IR in four directions (clockwise)
  * 
- * Current: Placeholder using Serial output
+ * Current: Placeholder using Serial output + directional LED sequence
+ * Sequence: FRONT → RIGHT → BACK → LEFT (clockwise)
  * To implement real IR: Replace with IRremote library calls
+ * 
+ * Note: SOS messages are header-only (no message content)
  */
-inline void irSend(String header, String message){
-  // Burst 1: Send header (IR mesh communication)
-  Serial.print("TX|"); 
+inline void irSend(String header, String message = ""){
+  // Array of TX pins in clockwise order: Front, Right, Back, Left
+  const int txPins[] = {IR_TX_FRONT, IR_TX_RIGHT, IR_TX_BACK, IR_TX_LEFT};
+  const char* dirNames[] = {"FRONT", "RIGHT", "BACK", "LEFT"};
+  
+  // Debug output
+  Serial.print("TX (all directions): ");
   Serial.print(header);
-  Serial.print("|");
-  Serial.println(message);
+  if(message.length() > 0){
+    Serial.print(" | ");
+    Serial.print(message);
+  } else {
+    Serial.print(" (header-only)");
+  }
+  Serial.println();
   
-  digitalWrite(IR_TX_PIN, HIGH);
-  delay(25);
-  digitalWrite(IR_TX_PIN, LOW);
-  delay(10);  // Inter-burst gap
-  
-  digitalWrite(IR_TX_PIN, HIGH);
-  delay(25);
-  digitalWrite(IR_TX_PIN, LOW);
+  // Transmit in all 4 directions sequentially
+  for(int i = 0; i < 4; i++){
+    // Placeholder: Toggle LED to indicate transmission
+    // Real implementation: Send encoded header + message via IR protocol
+    digitalWrite(txPins[i], HIGH);
+    delayMicroseconds(500);  // Brief pulse
+    digitalWrite(txPins[i], LOW);
+    
+    // Small gap before next direction (unless it's the last one)
+    if(i < 3){
+      delay(IR_DIRECTION_GAP);
+    }
+    
+    // Debug: show which direction transmitted
+    Serial.print("  → ");
+    Serial.println(dirNames[i]);
+  }
 }
 
 /*
- * IR Reception (Mesh to HQ)
+ * IR Reception (Node to Node Mesh)
  * Receives header and message via IR in two bursts
  * 
  * Current: Placeholder using Serial input
@@ -82,16 +103,12 @@ inline bool irReceive(String &header, String &message){
     String line = Serial.readStringUntil('\n');
     line.trim();  // Remove whitespace
     
-    // Check if this is a command from Python (starts with "TX|")
-    if(line.startsWith("TX|")){
-      return false;  // This is handled separately, not an IR receive
-    }
-    
     if(!headerReceived){
       // First burst: receive header
       if(line.length() == 13){  // Valid header length
         receivedHeader = line;
         headerReceived = true;
+        Serial.println("RX Burst 1 (Header) received");
       }
       return false;  // Wait for second burst
     } else {
@@ -99,112 +116,169 @@ inline bool irReceive(String &header, String &message){
       header = receivedHeader;
       message = line;
       headerReceived = false;  // Reset for next packet
+      Serial.println("RX Burst 2 (Message) received");
       return true;  // Complete packet received
     }
   }
   return false;
 }
 
+// ==================== LIFI BROADCAST FUNCTIONS ====================
+
+/*
+ * LiFi Broadcast (Node to Phones)
+ * Broadcasts message to phones via lamp light modulation
+ * 
+ * Current: Placeholder - flashes LED
+ * To implement real LiFi: Add high-speed PWM modulation at kHz frequencies
+ */
+inline void lifiTransmit(String message){
+  Serial.print("LiFi Broadcast: "); 
+  Serial.println(message);
+  
+  // Placeholder: Flash lamp to indicate broadcast
+  // Real implementation: Modulate lamp at kHz frequency with encoded data
+  digitalWrite(LAMP_LIGHT_PIN, HIGH);
+  delay(100);  // Longer pulse to distinguish from IR forwarding
+  digitalWrite(LAMP_LIGHT_PIN, LOW);
+}
+
 // ==================== PROTOCOL FUNCTIONS ====================
 
 /*
- * Process Incoming Packet from Mesh
+ * Generate SOS Emergency Message
+ * Creates Type 3 header-only message and sends to HQ via mesh
+ * Does NOT broadcast to phones - only routes to HQ
  * 
- * HQ behavior:
- *   1. Validates header format
- *   2. Verifies message integrity (hash check)
- *   3. Deduplicates using cache (filters duplicates BEFORE sending to Python)
- *   4. Forwards to Python via Serial in format: <src> <type> <message>
- *   5. Does NOT forward back to mesh (edge node)
- * 
- * Header Format (13 chars): [src(4)][dst(4)][type(1)][hash(4)]
+ * SOS Format: Header-only, no hash, no message content
+ * All SOS are identical, so no deduplication needed beyond source tracking
  */
-inline void processPacket(String header, String message){
-  // Validate header
-  if(header.length() != 13){
-    return;  // Invalid header, discard silently
-  }
+inline void generateSOS(){
+  // Build SOS header: [src][dst][type] = 9 chars (no hash, no message)
+  String header = String(NODE_ID) + HQ_ID + MSG_TYPE_SOS;
+
+  // For SOS, we only track by source (no hash needed, all SOS are same)
+  isNew(NODE_ID, 0);  // Use hash=0 for all SOS from this node
   
-  // Parse header
-  String src = header.substring(0,4);
-  String dst = header.substring(4,8);
-  char type = header[8];
-  String hashStr = header.substring(9,13);
-  uint16_t receivedHash = (uint16_t) strtol(hashStr.c_str(), NULL, 16);
+  irSend(header);  // Send header-only, no message content
 
-  // Verify integrity: recompute hash and compare
-  uint16_t computedHash = simpleHash(message);
-  if(computedHash != receivedHash){
-    return;  // Corrupted message, discard silently
-  }
-
-  // Check if message is new (deduplicate)
-  if(!isNew(src, receivedHash)){
-    return;  // Duplicate message, already processed
-  }
-
-  // Visual feedback: blink LED for received message
+  // Visual feedback only - NO LiFi broadcast for SOS
   digitalWrite(LED_STATUS, HIGH);
-  
-  // Forward to Python via Serial
-  // Format: <src> <type> <message>
-  Serial.print(src);
-  Serial.print(" ");
-  Serial.print(type);
-  Serial.print(" ");
-  Serial.println(message);
-  
-  delay(50);
+  delay(200);
   digitalWrite(LED_STATUS, LOW);
+  
+  Serial.println("SOS sent to HQ (header-only, no phone broadcast)");
 }
 
 /*
- * Handle Command from Python
+ * Process and Forward Incoming Packet
  * 
- * Format: TX|<dst>|<type>|<message>
- * Example: TX|FFFF|1|Evacuation route open
- * Example: TX|102a|2|Check battery
- * Example: TX|203b|4|Status request
+ * Core mesh networking function:
+ *   1. Validates header format (length varies by type)
+ *   2. Verifies message integrity (hash check for types with messages)
+ *   3. Forwards messages via mesh (routing)
+ *   4. Processes messages based on type and destination
+ * 
+ * Header Formats:
+ *   Type 1,2,4: [src(4)][dst(4)][type(1)][hash(4)] = 13 chars
+ *   Type 3 (SOS): [src(4)][dst(4)][type(1)] = 9 chars (header-only)
  */
-inline void handlePythonCommand(String command){
-  // Parse command: TX|dst|type|message
-  int firstPipe = command.indexOf('|');
-  int secondPipe = command.indexOf('|', firstPipe + 1);
-  int thirdPipe = command.indexOf('|', secondPipe + 1);
-  
-  if(firstPipe == -1 || secondPipe == -1 || thirdPipe == -1){
-    Serial.println("ERR|Invalid command format");
+inline void forwardPacket(String header, String message, 
+                          String &latestLiFiMessage, 
+                          unsigned long &lastLiFiBroadcastTime){
+  // Parse basic header info
+  if(header.length() < 9){
+    Serial.println("Invalid header (too short)");
     return;
   }
   
-  String dst = command.substring(firstPipe + 1, secondPipe);
-  String typeStr = command.substring(secondPipe + 1, thirdPipe);
-  String message = command.substring(thirdPipe + 1);
+  String src = header.substring(0,4);
+  String dst = header.substring(4,8);
+  char type = header[8];
   
-  // Validate
-  if(dst.length() != 4 || typeStr.length() != 1){
-    Serial.println("ERR|Invalid destination or type");
+  // Type 3 (SOS) is header-only, no hash validation needed
+  if(type == MSG_TYPE_SOS){
+    if(header.length() != HEADER_LENGTH_SOS){
+      Serial.println("Invalid SOS header length");
+      return;
+    }
+    
+    // Forward SOS if new (use hash=0 for all SOS from same source)
+    if(isNew(src, 0)){
+      irSend(header);  // Forward header-only
+      digitalWrite(LED_STATUS, HIGH);
+      delay(50);
+      digitalWrite(LED_STATUS, LOW);
+    }
+    
+    // Process if this is HQ
+    if(dst == HQ_ID && NODE_ID == HQ_ID){
+      Serial.println("╔════════════════════════════╗");
+      Serial.println("║   SOS ALERT RECEIVED       ║");
+      Serial.println("╚════════════════════════════╝");
+      Serial.print("From Node: "); Serial.println(src);
+      Serial.println("────────────────────────────");
+    }
     return;
   }
   
-  char type = typeStr[0];
+  // For all other types, validate standard header with hash
+  if(header.length() != HEADER_LENGTH_STANDARD){
+    Serial.println("Invalid header length");
+    return;
+  }
   
-  // Compute hash
-  uint16_t hash = simpleHash(message);
-  char hashStr[5];
-  sprintf(hashStr, "%04X", hash);
+  String hashStr = header.substring(9,13);
+  uint16_t receivedHash = (uint16_t) strtol(hashStr.c_str(), NULL, 16);
+
+  // Verify message integrity
+  uint16_t computedHash = simpleHash(message);
+  if(computedHash != receivedHash){
+    Serial.println("Corrupted message (hash mismatch) - discarded");
+    return;
+  }
+
+  // Forward if new
+  if(isNew(src, receivedHash)){
+    irSend(header, message);
+    digitalWrite(LED_STATUS, HIGH);
+    delay(50);
+    digitalWrite(LED_STATUS, LOW);
+  }
+
+  // Process based on type and destination
   
-  // Build header: [src(4)][dst(4)][type(1)][hash(4)]
-  String header = String(NODE_ID) + dst + type + String(hashStr);
+  // Type 1: BROADCAST (HQ → All) - Only process if from authorized HQ
+  if(type == MSG_TYPE_BROADCAST && dst == BROADCAST_ID && IS_FROM_HQ(src)){
+    Serial.println("=== BROADCAST FROM HQ ===");
+    Serial.print("From HQ: "); Serial.println(src);
+    Serial.print("Message: ");
+    Serial.println(message);
+    
+    latestLiFiMessage = message;
+    lastLiFiBroadcastTime = millis();
+    lifiTransmit(message);
+  }
   
-  // Add to cache (don't process our own messages)
-  isNew(NODE_ID, hash);
+  // Type 2: TARGETED BROADCAST (HQ → Specific lamp) - Only process if from authorized HQ
+  else if(type == MSG_TYPE_TARGETED && dst == NODE_ID && IS_FROM_HQ(src)){
+    Serial.println("=== TARGETED BROADCAST FROM HQ ===");
+    Serial.print("From HQ: "); Serial.println(src);
+    Serial.print("Message: ");
+    Serial.println(message);
+    Serial.println("Broadcasting to phones in this area...");
+    
+    latestLiFiMessage = message;
+    lastLiFiBroadcastTime = millis();
+    lifiTransmit(message);
+  }
   
-  // Send via IR
-  irSend(header, message);
-  
-  // Confirm to Python
-  Serial.println("OK|Message sent");
+  // Type 4: MESSAGE (Node → HQ)
+  else if(type == MSG_TYPE_MESSAGE && dst == HQ_ID && NODE_ID == HQ_ID){
+    Serial.println("=== Message from Node ===");
+    Serial.print("From: "); Serial.println(src);
+    Serial.print("Message: "); Serial.println(message);
+  }
 }
 
 #endif // LIFI_H

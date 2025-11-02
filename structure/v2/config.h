@@ -5,25 +5,54 @@
 
 // ==================== NODE CONFIGURATION ====================
 
-// HQ Node ID (headquarters identifier)
-#define NODE_ID      "000h"
+// Unique ID for this node (4 characters, alphanumeric)
+// IMPORTANT: Change this for each node! Examples: "102a", "203b", "304c"
+#define NODE_ID      "102a"
 
 // Reserved ID for broadcast messages (all nodes receive)
 #define BROADCAST_ID "FFFF"
 
-// Headquarters/Base Station ID (same as NODE_ID for HQ)
+// Headquarters/Base Station ID (SOS messages are sent here)
+// Using "000h" pattern: 3 digits + 'h' for headquarters
 #define HQ_ID        "000h"
+
+// Multi-HQ Support (optional additional headquarters)
+// Uncomment and configure if multiple HQ stations are needed
+// #define HQ_ID_2      "001h"
+// #define HQ_ID_3      "002h"
+
+// Helper macro to check if source is authorized HQ
+// Add additional HQ IDs here if using multi-HQ setup
+#define IS_FROM_HQ(src) ((src) == HQ_ID)
+// For multi-HQ: #define IS_FROM_HQ(src) ((src) == HQ_ID || (src) == HQ_ID_2 || (src) == HQ_ID_3)
 
 // ==================== PIN ASSIGNMENTS ====================
 
-#define IR_TX_PIN      D1  // IR LED transmitter (OUTPUT)
+#define SOS_PIN        D3  // Pushbutton for SOS (INPUT_PULLUP, active LOW)
+
+// Directional IR TX pins (4 directions for street lamp mesh)
+#define IR_TX_FRONT    D1  // Forward direction
+#define IR_TX_RIGHT    D5  // Right direction  
+#define IR_TX_BACK     D6  // Backward direction
+#define IR_TX_LEFT     D7  // Left direction
+
 #define IR_RX_PIN      D2  // IR receiver module (INPUT)
 #define LED_STATUS     D4  // Status LED for visual feedback (OUTPUT)
+#define LAMP_LIGHT_PIN D8  // Lamp LED - for LiFi transmission (OUTPUT)
 
 // ==================== TIMING CONSTANTS ====================
 
+// SOS button cooldown period (3 minutes = 180,000 milliseconds)
+const unsigned long SOS_COOLDOWN = 180000;
+
+// LiFi rebroadcast interval for phone receivers (1 minute = 60,000 milliseconds)
+const unsigned long LIFI_REBROADCAST_INTERVAL = 60000;
+
+// IR transmission timing (milliseconds)
+const unsigned long IR_DIRECTION_GAP = 10;  // Gap between transmitting each direction
+
 // Cache size for message deduplication
-#define CACHE_SIZE 8  // Larger cache for HQ (receives from all nodes)
+#define CACHE_SIZE 3
 
 // ==================== MESSAGE TYPE DEFINITIONS ====================
 
@@ -31,28 +60,46 @@
  * Message Type System:
  * 
  * Type '1' - BROADCAST (HQ → All Lamps)
- *   HQ sends system-wide announcements
+ *   All lamps broadcast message to phones via LiFi
+ *   Header: [src(4)][dst(4)][type(1)][hash(4)] = 13 chars
  * 
  * Type '2' - TARGETED BROADCAST (HQ → Specific Lamp)
- *   HQ tells specific lamp to broadcast message
+ *   Only target lamp broadcasts to phones via LiFi
+ *   Header: [src(4)][dst(4)][type(1)][hash(4)] = 13 chars
  * 
  * Type '3' - SOS (Lamp → HQ)
- *   Emergency alert from lamps (HQ receives only)
+ *   Emergency alert routes silently to HQ (no phone broadcast)
+ *   Header: [src(4)][dst(4)][type(1)] = 9 chars (NO hash, NO message)
+ *   All SOS are identical, no need for hash or message content
  * 
- * Type '4' - MESSAGE (Node ↔ HQ or Node ↔ Node)
- *   Normal status/info messages
+ * Type '4' - MESSAGE (Node → HQ)
+ *   Normal status/info messages to HQ (no phone broadcast)
+ *   Header: [src(4)][dst(4)][type(1)][hash(4)] = 13 chars
  */
 
 #define MSG_TYPE_BROADCAST '1'  // HQ → All lamps
 #define MSG_TYPE_TARGETED  '2'  // HQ → Specific lamp
-#define MSG_TYPE_SOS       '3'  // Lamp → HQ (emergency)
+#define MSG_TYPE_SOS       '3'  // Lamp → HQ (emergency, header-only)
 #define MSG_TYPE_MESSAGE   '4'  // Node → HQ (normal message)
+
+// Header lengths for validation
+#define HEADER_LENGTH_STANDARD 13  // Types 1, 2, 4 with hash
+#define HEADER_LENGTH_SOS      9   // Type 3 without hash
+
+// ==================== SOS CONFIGURATION ====================
+
+// SOS is header-only, no message content needed
+// All SOS messages are identical emergency alerts
+#define SOS_MESSAGE "SOS"  // For display purposes only, not transmitted
 
 // ==================== DATA STRUCTURES ====================
 
 /*
  * Message Cache Structure
- * Prevents duplicate message processing
+ * Used for deduplication to prevent:
+ *   - Infinite forwarding loops
+ *   - Duplicate processing
+ *   - Broadcast storms
  */
 struct MsgCache {
   String src;       // Source node ID
