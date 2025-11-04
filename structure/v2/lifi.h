@@ -39,24 +39,98 @@ inline bool isNew(String src, uint16_t hash){
   return true;
 }
 
+// ==================== RETRANSMISSION QUEUE MANAGEMENT ====================
+
+/*
+ * Add Message to Retransmission Queue
+ * Messages will be sent RETRANSMIT_COUNT times over the first minute
+ */
+inline void addToRetransmitQueue(String header, String message = ""){
+  // Find empty slot
+  for(int i = 0; i < RETRANSMIT_QUEUE_SIZE; i++){
+    if(!retransmitQueue[i].active){
+      retransmitQueue[i].header = header;
+      retransmitQueue[i].message = message;
+      retransmitQueue[i].firstSentTime = millis();
+      retransmitQueue[i].sentCount = 1;  // First transmission already done
+      retransmitQueue[i].active = true;
+      
+      Serial.print("Added to retransmit queue (slot ");
+      Serial.print(i);
+      Serial.println(")");
+      return;
+    }
+  }
+  Serial.println("Warning: Retransmit queue full!");
+}
+
+/*
+ * Process Retransmission Queue
+ * Called every loop iteration to check if any messages need resending
+ */
+inline void processRetransmitQueue(){
+  unsigned long now = millis();
+  
+  for(int i = 0; i < RETRANSMIT_QUEUE_SIZE; i++){
+    if(!retransmitQueue[i].active) continue;
+    
+    unsigned long elapsed = now - retransmitQueue[i].firstSentTime;
+    
+    // Check if redundancy window expired (1 minute passed)
+    if(elapsed > REDUNDANCY_WINDOW){
+      retransmitQueue[i].active = false;  // Deactivate slot
+      Serial.print("Retransmit complete for slot ");
+      Serial.println(i);
+      continue;
+    }
+    
+    // Check if it's time for next retransmission
+    unsigned long nextSendTime = retransmitQueue[i].sentCount * RETRANSMIT_INTERVAL;
+    
+    if(elapsed >= nextSendTime && retransmitQueue[i].sentCount < RETRANSMIT_COUNT){
+      // Time to retransmit!
+      Serial.print("Retransmit #");
+      Serial.print(retransmitQueue[i].sentCount + 1);
+      Serial.print(" for slot ");
+      Serial.println(i);
+      
+      // Resend via IR (external function, declared below)
+      irSendRaw(retransmitQueue[i].header, retransmitQueue[i].message);
+      
+      retransmitQueue[i].sentCount++;
+    }
+  }
+}
+
 // ==================== IR COMMUNICATION FUNCTIONS ====================
 
 /*
- * IR Transmission (Node to Node Mesh)
- * Sends header (and optional message) via IR in four directions (clockwise)
- * 
- * Current: Placeholder using Serial output + directional LED sequence
- * Sequence: FRONT → RIGHT → BACK → LEFT (clockwise)
- * To implement real IR: Replace with IRremote library calls
- * 
- * Note: SOS messages are header-only (no message content)
+ * Raw IR Transmission (used internally by retransmit and initial send)
+ * Sends header (and optional message) via IR in four directions
  */
-inline void irSend(String header, String message = ""){
-  // Array of TX pins in clockwise order: Front, Right, Back, Left
+inline void irSendRaw(String header, String message = ""){
   const int txPins[] = {IR_TX_FRONT, IR_TX_RIGHT, IR_TX_BACK, IR_TX_LEFT};
   const char* dirNames[] = {"FRONT", "RIGHT", "BACK", "LEFT"};
   
-  // Debug output
+  // Transmit in all 4 directions sequentially
+  for(int i = 0; i < 4; i++){
+    digitalWrite(txPins[i], HIGH);
+    delayMicroseconds(500);
+    digitalWrite(txPins[i], LOW);
+    
+    if(i < 3){
+      delay(IR_DIRECTION_GAP);
+    }
+  }
+}
+
+/*
+ * IR Transmission (Node to Node Mesh)
+ * Sends header (and optional message) via IR + adds to retransmit queue
+ * 
+ * This is the public function - it handles both initial send and queuing
+ */
+inline void irSend(String header, String message = ""){
   Serial.print("TX (all directions): ");
   Serial.print(header);
   if(message.length() > 0){
@@ -67,55 +141,54 @@ inline void irSend(String header, String message = ""){
   }
   Serial.println();
   
-  // Transmit in all 4 directions sequentially
-  for(int i = 0; i < 4; i++){
-    // Placeholder: Toggle LED to indicate transmission
-    // Real implementation: Send encoded header + message via IR protocol
-    digitalWrite(txPins[i], HIGH);
-    delayMicroseconds(500);  // Brief pulse
-    digitalWrite(txPins[i], LOW);
-    
-    // Small gap before next direction (unless it's the last one)
-    if(i < 3){
-      delay(IR_DIRECTION_GAP);
-    }
-    
-    // Debug: show which direction transmitted
-    Serial.print("  → ");
-    Serial.println(dirNames[i]);
-  }
+  // Send immediately
+  irSendRaw(header, message);
+  
+  // Add to retransmit queue for redundancy in first minute
+  addToRetransmitQueue(header, message);
 }
 
 /*
  * IR Reception (Node to Node Mesh)
- * Receives header and message via IR in two bursts
+ * Handles BOTH header-only (SOS) and header+message packets
  * 
  * Current: Placeholder using Serial input
- * Format: Line 1 = header (13 chars), Line 2 = message
+ * Format: 
+ *   - Single line with 9 chars = SOS header-only
+ *   - Line 1 (13 chars) + Line 2 = Standard header + message
  * 
  * To implement real IR: Replace with IRremote library calls
  */
 inline bool irReceive(String &header, String &message){
-  static bool headerReceived = false;
+  static bool waitingForMessage = false;
   static String receivedHeader = "";
   
   if (Serial.available()){
     String line = Serial.readStringUntil('\n');
-    line.trim();  // Remove whitespace
+    line.trim();
     
-    if(!headerReceived){
+    // Check if this is a header-only SOS packet (9 chars)
+    if(line.length() == HEADER_LENGTH_SOS && line[8] == MSG_TYPE_SOS){
+      header = line;
+      message = "";  // No message for SOS
+      Serial.println("RX: SOS header-only packet");
+      return true;  // Complete SOS packet received
+    }
+    
+    // Otherwise, handle standard two-burst format
+    if(!waitingForMessage){
       // First burst: receive header
-      if(line.length() == 13){  // Valid header length
+      if(line.length() == HEADER_LENGTH_STANDARD){
         receivedHeader = line;
-        headerReceived = true;
-        Serial.println("RX Burst 1 (Header) received");
+        waitingForMessage = true;
+        Serial.println("RX Burst 1 (Header) received, waiting for message...");
       }
-      return false;  // Wait for second burst
+      return false;
     } else {
       // Second burst: receive message
       header = receivedHeader;
       message = line;
-      headerReceived = false;  // Reset for next packet
+      waitingForMessage = false;
       Serial.println("RX Burst 2 (Message) received");
       return true;  // Complete packet received
     }
@@ -128,18 +201,13 @@ inline bool irReceive(String &header, String &message){
 /*
  * LiFi Broadcast (Node to Phones)
  * Broadcasts message to phones via lamp light modulation
- * 
- * Current: Placeholder - flashes LED
- * To implement real LiFi: Add high-speed PWM modulation at kHz frequencies
  */
 inline void lifiTransmit(String message){
   Serial.print("LiFi Broadcast: "); 
   Serial.println(message);
   
-  // Placeholder: Flash lamp to indicate broadcast
-  // Real implementation: Modulate lamp at kHz frequency with encoded data
   digitalWrite(LAMP_LIGHT_PIN, HIGH);
-  delay(100);  // Longer pulse to distinguish from IR forwarding
+  delay(100);
   digitalWrite(LAMP_LIGHT_PIN, LOW);
 }
 
@@ -148,45 +216,27 @@ inline void lifiTransmit(String message){
 /*
  * Generate SOS Emergency Message
  * Creates Type 3 header-only message and sends to HQ via mesh
- * Does NOT broadcast to phones - only routes to HQ
- * 
- * SOS Format: Header-only, no hash, no message content
- * All SOS are identical, so no deduplication needed beyond source tracking
  */
 inline void generateSOS(){
-  // Build SOS header: [src][dst][type] = 9 chars (no hash, no message)
   String header = String(NODE_ID) + HQ_ID + MSG_TYPE_SOS;
 
-  // For SOS, we only track by source (no hash needed, all SOS are same)
-  isNew(NODE_ID, 0);  // Use hash=0 for all SOS from this node
+  isNew(NODE_ID, 0);  // Use hash=0 for SOS tracking
   
-  irSend(header);  // Send header-only, no message content
+  irSend(header);  // Send header-only (will be retransmitted 3x in first minute)
 
-  // Visual feedback only - NO LiFi broadcast for SOS
   digitalWrite(LED_STATUS, HIGH);
   delay(200);
   digitalWrite(LED_STATUS, LOW);
   
-  Serial.println("SOS sent to HQ (header-only, no phone broadcast)");
+  Serial.println("SOS sent to HQ (header-only, will retransmit 3x in first minute)");
 }
 
 /*
  * Process and Forward Incoming Packet
- * 
- * Core mesh networking function:
- *   1. Validates header format (length varies by type)
- *   2. Verifies message integrity (hash check for types with messages)
- *   3. Forwards messages via mesh (routing)
- *   4. Processes messages based on type and destination
- * 
- * Header Formats:
- *   Type 1,2,4: [src(4)][dst(4)][type(1)][hash(4)] = 13 chars
- *   Type 3 (SOS): [src(4)][dst(4)][type(1)] = 9 chars (header-only)
  */
 inline void forwardPacket(String header, String message, 
                           String &latestLiFiMessage, 
                           unsigned long &lastLiFiBroadcastTime){
-  // Parse basic header info
   if(header.length() < 9){
     Serial.println("Invalid header (too short)");
     return;
@@ -196,16 +246,16 @@ inline void forwardPacket(String header, String message,
   String dst = header.substring(4,8);
   char type = header[8];
   
-  // Type 3 (SOS) is header-only, no hash validation needed
+  // Type 3 (SOS) is header-only
   if(type == MSG_TYPE_SOS){
     if(header.length() != HEADER_LENGTH_SOS){
       Serial.println("Invalid SOS header length");
       return;
     }
     
-    // Forward SOS if new (use hash=0 for all SOS from same source)
+    // Forward SOS if new
     if(isNew(src, 0)){
-      irSend(header);  // Forward header-only
+      irSend(header);  // Will be retransmitted automatically
       digitalWrite(LED_STATUS, HIGH);
       delay(50);
       digitalWrite(LED_STATUS, LOW);
@@ -240,7 +290,7 @@ inline void forwardPacket(String header, String message,
 
   // Forward if new
   if(isNew(src, receivedHash)){
-    irSend(header, message);
+    irSend(header, message);  // Will be retransmitted automatically
     digitalWrite(LED_STATUS, HIGH);
     delay(50);
     digitalWrite(LED_STATUS, LOW);
@@ -248,7 +298,7 @@ inline void forwardPacket(String header, String message,
 
   // Process based on type and destination
   
-  // Type 1: BROADCAST (HQ → All) - Only process if from authorized HQ
+  // Type 1: BROADCAST (HQ → All)
   if(type == MSG_TYPE_BROADCAST && dst == BROADCAST_ID && IS_FROM_HQ(src)){
     Serial.println("=== BROADCAST FROM HQ ===");
     Serial.print("From HQ: "); Serial.println(src);
@@ -260,7 +310,7 @@ inline void forwardPacket(String header, String message,
     lifiTransmit(message);
   }
   
-  // Type 2: TARGETED BROADCAST (HQ → Specific lamp) - Only process if from authorized HQ
+  // Type 2: TARGETED BROADCAST (HQ → Specific lamp)
   else if(type == MSG_TYPE_TARGETED && dst == NODE_ID && IS_FROM_HQ(src)){
     Serial.println("=== TARGETED BROADCAST FROM HQ ===");
     Serial.print("From HQ: "); Serial.println(src);
