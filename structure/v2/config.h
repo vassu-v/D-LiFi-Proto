@@ -51,6 +51,19 @@ const unsigned long LIFI_REBROADCAST_INTERVAL = 60000;
 // IR transmission timing (milliseconds)
 const unsigned long IR_DIRECTION_GAP = 10;  // Gap between transmitting each direction
 
+// ==================== REDUNDANCY & RELIABILITY ====================
+
+// Number of times to retransmit a message in the first minute
+// This ensures reliable delivery without ACKs in the initial critical period
+#define RETRANSMIT_COUNT 3
+
+// Interval between retransmissions (milliseconds)
+// 60000ms / 3 retransmits = ~20 seconds between each send
+const unsigned long RETRANSMIT_INTERVAL = 20000;  // 20 seconds
+
+// Total redundancy window (first minute after message generation/reception)
+const unsigned long REDUNDANCY_WINDOW = 60000;  // 1 minute
+
 // Cache size for message deduplication
 #define CACHE_SIZE 3
 
@@ -106,10 +119,28 @@ struct MsgCache {
   uint16_t msgHash; // Hash of message content
 };
 
+/*
+ * Retransmission Tracker
+ * Tracks messages that need redundant sending in first minute
+ */
+struct RetransmitEntry {
+  String header;                    // Full header to retransmit
+  String message;                   // Message content (empty for SOS)
+  unsigned long firstSentTime;      // Timestamp of first transmission
+  uint8_t sentCount;                // How many times sent so far
+  bool active;                      // Is this slot in use?
+};
+
+// Maximum number of concurrent messages being retransmitted
+#define RETRANSMIT_QUEUE_SIZE 3
+
 // ==================== GLOBAL VARIABLES (declared extern) ====================
 
 // Cache array (defined in main.ino)
 extern MsgCache cache[CACHE_SIZE];
 extern int cacheIndex;
+
+// Retransmission queue (defined in main.ino)
+extern RetransmitEntry retransmitQueue[RETRANSMIT_QUEUE_SIZE];
 
 #endif // CONFIG_H
