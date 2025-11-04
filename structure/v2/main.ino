@@ -8,6 +8,9 @@
 MsgCache cache[CACHE_SIZE];
 int cacheIndex = 0;
 
+// Retransmission queue (defined here, declared extern in config.h)
+RetransmitEntry retransmitQueue[RETRANSMIT_QUEUE_SIZE];
+
 // Button state tracking
 unsigned long lastSOSTime = 0;
 bool lastButtonState = HIGH;  // HIGH = not pressed (INPUT_PULLUP)
@@ -32,18 +35,28 @@ void setup(){
   pinMode(LED_STATUS, OUTPUT);
   pinMode(LAMP_LIGHT_PIN, OUTPUT);
 
-  // Initialize cache to empty state (prevent garbage data)
+  // Initialize cache to empty state
   for(int i = 0; i < CACHE_SIZE; i++){
     cache[i].src = "";
     cache[i].msgHash = 0;
   }
 
+  // Initialize retransmit queue to empty state
+  for(int i = 0; i < RETRANSMIT_QUEUE_SIZE; i++){
+    retransmitQueue[i].active = false;
+  }
+
   Serial.begin(115200);
-  Serial.println("\n=== LiFi Mesh Lamp Node ===");
+  Serial.println("\n================================");
+  Serial.println("   LiFi Mesh Lamp Node V2");
+  Serial.println("================================");
   Serial.print("Node ID: "); Serial.println(NODE_ID);
-  Serial.print("Cooldown: "); Serial.print(SOS_COOLDOWN/1000); Serial.println("s");
+  Serial.print("SOS Cooldown: "); Serial.print(SOS_COOLDOWN/1000); Serial.println("s");
+  Serial.print("Retransmit Count: "); Serial.println(RETRANSMIT_COUNT);
+  Serial.print("Retransmit Interval: "); Serial.print(RETRANSMIT_INTERVAL/1000); Serial.println("s");
   Serial.println("4-Direction TX enabled");
-  Serial.println("===========================\n");
+  Serial.println("Header-only SOS support enabled");
+  Serial.println("================================\n");
   
   // Startup LED flash
   digitalWrite(LED_STATUS, HIGH);
@@ -81,7 +94,10 @@ void loop(){
     forwardPacket(header, message, latestLiFiMessage, lastLiFiBroadcastTime);
   }
 
-  // ===== TASK 3: Periodic LiFi rebroadcast =====
+  // ===== TASK 3: Process retransmission queue =====
+  processRetransmitQueue();
+
+  // ===== TASK 4: Periodic LiFi rebroadcast =====
   if(latestLiFiMessage != "" && 
      (millis() - lastLiFiBroadcastTime >= LIFI_REBROADCAST_INTERVAL)){
     
