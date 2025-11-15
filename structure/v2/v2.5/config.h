@@ -70,23 +70,23 @@
 // ==================== TIMING CONSTANTS ====================
 
 // SOS button cooldown period (30 seconds for testing, 3 minutes for production)
-const unsigned long SOS_COOLDOWN = 30000;  // 30 seconds
+const unsigned long SOS_COOLDOWN = 10000;  // 30 seconds
 
 // LiFi rebroadcast interval for phone receivers (1 minute = 60,000 milliseconds)
 const unsigned long LIFI_REBROADCAST_INTERVAL = 60000;
 
 // IR transmission timing (milliseconds)
-const unsigned long IR_DIRECTION_GAP = 10;  // Gap between transmitting each direction
+const unsigned long IR_DIRECTION_GAP = 100;  // Gap between transmitting each direction
 const unsigned long IR_MESSAGE_TIMEOUT = 3000;  // Timeout waiting for message segment (3 seconds)
 
 // ==================== REDUNDANCY & RELIABILITY ====================
 
 // Number of times to retransmit a message in the first minute
 // This ensures reliable delivery without ACKs in the initial critical period
-#define RETRANSMIT_COUNT 1
+#define RETRANSMIT_COUNT 2
 
 // Interval between retransmissions (milliseconds)
-const unsigned long RETRANSMIT_INTERVAL = 20000;  // 20 seconds
+const unsigned long RETRANSMIT_INTERVAL = 10000;  // 20 seconds
 
 // Total redundancy window (first minute after message generation/reception)
 const unsigned long REDUNDANCY_WINDOW = 60000;  // 1 minute
