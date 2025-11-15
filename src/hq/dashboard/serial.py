@@ -114,15 +114,44 @@ class ArduinoSerial:
         if line.startswith('OK|') or line.startswith('ERR|'):
             return
         
+        # Skip debug output from V2.5/V3 firmware
+        if line.startswith('>>>') or line.startswith('═') or line.startswith('─'):
+            return
+        
+        # Parse V2.5 format: "RX IR: <header>"
+        if 'RX IR:' in line or 'COMPLETE PACKET RECEIVED' in line:
+            return  # Skip IR debug lines
+        
         # Parse message format: <sender_id> <type> <content>
-        # Example: "102a 3 HELP!"
+        # V2.5 header-only (Type 3 SOS): "102a000h3"
+        # V2.5 with message (Type 1/2/4): "000hFFFF1ABCD" + "Evacuate"
+        
         parts = line.split(' ', 2)
         
-        if len(parts) == 3:
-            sender_id, msg_type, content = parts
+        # Type 3 (SOS) - header-only format
+        if len(parts) == 1 and len(parts[0]) >= 9:
+            header = parts[0]
+            if len(header) == 9 and header[8] == '3':  # SOS
+                sender_id = header[0:4]
+                msg_type = '3'
+                content = 'SOS'
+                
+                if self.on_message:
+                    self.on_message({
+                        'sender_id': sender_id,
+                        'type': msg_type,
+                        'content': content
+                    })
+                return
+        
+        # Standard format (Type 1/2/4)
+        if len(parts) >= 2:
+            sender_id = parts[0]
+            msg_type = parts[1] if len(parts) > 1 else '4'
+            content = parts[2] if len(parts) > 2 else ''
             
             # Validate format
-            if len(sender_id) == 4 and msg_type in ['1', '2', '3', '4']:
+            if len(sender_id) == 4 and msg_type in ['0', '1', '2', '3', '4']:
                 # Call callback if provided
                 if self.on_message:
                     self.on_message({
@@ -149,17 +178,63 @@ class ArduinoSerial:
             print(f"❌ Send failed: {e}")
             return False
     
+    def send_init(self, init_id):
+        """Send Type 0: INIT message to build gradient"""
+        if not self.connected or not self.serial:
+            print("❌ Not connected")
+            return False
+        
+        try:
+            command = f"INIT|{init_id}\n"
+            self.serial.write(command.encode('utf-8'))
+            print(f"→ INIT ID: {init_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Send failed: {e}")
+            return False
+    
     def send_broadcast(self, message):
         """Send Type 1: Broadcast to all lamps"""
-        return self.send("FFFF", "1", message)
+        return self.send("FFFF", "1", message, cmd_type="BROADCAST")
     
     def send_targeted(self, node_id, message):
         """Send Type 2: Targeted message to specific lamp"""
-        return self.send(node_id, "2", message)
+        return self.send(node_id, "2", message, cmd_type="TARGET")
     
     def send_message(self, node_id, message):
         """Send Type 4: Normal message to node"""
-        return self.send(node_id, "4", message)
+        return self.send(node_id, "4", message, cmd_type="MESSAGE")
+    
+    def send(self, destination, msg_type, content, cmd_type="MESSAGE"):
+        """
+        Send message to Arduino HQ (V3 format)
+        
+        Args:
+            destination: Node ID or "FFFF" for broadcast
+            msg_type: '1', '2', or '4'
+            content: Message content
+            cmd_type: Command prefix (BROADCAST, TARGET, MESSAGE)
+        """
+        if not self.connected or not self.serial:
+            print("❌ Not connected")
+            return False
+        
+        try:
+            if cmd_type == "BROADCAST":
+                command = f"BROADCAST|{content}\n"
+            elif cmd_type == "TARGET":
+                command = f"TARGET|{destination}|{content}\n"
+            elif cmd_type == "MESSAGE":
+                command = f"MESSAGE|{destination}|{content}\n"
+            else:
+                return False
+            
+            self.serial.write(command.encode('utf-8'))
+            print(f"→ {command.strip()}")
+            return True
+        except Exception as e:
+            print(f"❌ Send failed: {e}")
+            return False
 
 
 # Test function
