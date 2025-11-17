@@ -89,10 +89,8 @@ Each street lamp becomes a **LiFi node** capable of sending and receiving encode
 
 | Task | Description | Priority |
 |------|--------------|-----------|
-| 🧠 Real LiFi Integration (IR Layer) | Replace IR placeholders with actual LiFi/IR hardware drivers using proper modulation and framing. | High |
 | 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | Medium |
 | 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | High |
-| ⚙️ Simulation Mode | Add serial or Wokwi simulation to test message propagation without hardware. | Low |
 | 🔐 Lightweight Security Layer | Add checksum or lightweight encryption for real-world deployments. | Low |
 | 📖 Extended Documentation | Add diagrams, wiring schematics, and setup notes under `/hardware` and `/docs`. | Medium |
 
@@ -113,7 +111,7 @@ Maintaining precise transmission timing to ensure no bits are lost
 
 2. ACKs / Retransmission
 
-Acknowledgments or retransmission mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths.
+Acknowledgments mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths but re-transmission is added.
 For larger or more critical networks, ACK-based delivery confirmation can be added later if required.
 
 3. Security
