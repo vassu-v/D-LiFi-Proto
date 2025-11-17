@@ -89,12 +89,8 @@ Each street lamp becomes a **LiFi node** capable of sending and receiving encode
 
 | Task | Description | Priority |
 |------|--------------|-----------|
-| 🧠 Real LiFi Integration (IR Layer) | Replace IR placeholders with actual LiFi/IR hardware drivers using proper modulation and framing. | High |
-| 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | High |
-| 🖥️ HQ Software / Dashboard | Build HQ node logging and visualization software (serial + GUI) for message and alert tracking. | Medium |
-| 🔧 Modular Refactor | Split current monolithic code into per-module files (`ir_comm.cpp`, `cache.cpp`, etc.) under `/structure`. | Medium |
-| 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | Medium |
-| ⚙️ Simulation Mode | Add serial or Wokwi simulation to test message propagation without hardware. | Low |
+| 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | Medium |
+| 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | High |
 | 🔐 Lightweight Security Layer | Add checksum or lightweight encryption for real-world deployments. | Low |
 | 📖 Extended Documentation | Add diagrams, wiring schematics, and setup notes under `/hardware` and `/docs`. | Medium |
 
@@ -115,7 +111,7 @@ Maintaining precise transmission timing to ensure no bits are lost
 
 2. ACKs / Retransmission
 
-Acknowledgments or retransmission mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths.
+Acknowledgments mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths but re-transmission is added.
 For larger or more critical networks, ACK-based delivery confirmation can be added later if required.
 
 3. Security
@@ -123,3 +119,7 @@ For larger or more critical networks, ACK-based delivery confirmation can be add
 Security features (encryption, authentication) are not necessary for the disaster-response demo, since the system operates in a controlled, emergency-use environment.
 For real-world deployment, lightweight encryption and message verification can be implemented to prevent spoofing or unauthorized access.
 
+4. Memory Optimization (For Production)
+
+Current firmware uses Arduino String objects for clarity during prototyping.
+In long-term or low-RAM deployments, replace all dynamic String usage with fixed-size char[] C-strings and safe functions (snprintf, strcmp, etc.) to prevent heap fragmentation and improve determinism.

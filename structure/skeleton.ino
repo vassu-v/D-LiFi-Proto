@@ -41,6 +41,46 @@ const unsigned long LIFI_REBROADCAST_INTERVAL = 60000;
 #define SOS_MESSAGE "HELP!"
 #define SOS_HASH 0x28F9  // simpleHash("HELP!") = 0x28F9
 
+// ==================== MESSAGE TYPE DEFINITIONS ====================
+
+/*
+ * Message Type System
+ * 
+ * Type '1' - BROADCAST (HQ → All Lamps)
+ *   From: HQ (000h)
+ *   To: FFFF (all nodes)
+ *   Purpose: System-wide announcements, all lamps broadcast to phones
+ *   Example: "All clear", "Evacuation complete"
+ *   Action: All nodes receive and broadcast to phones via LiFi
+ * 
+ * Type '2' - TARGETED BROADCAST (HQ → Specific Lamp)
+ *   From: HQ (000h)
+ *   To: Specific node ID
+ *   Purpose: HQ tells specific lamp to broadcast message to phones
+ *   Example: "Exit via stairwell B" sent only to lamp near stairwell
+ *   Action: Only target node broadcasts to phones via LiFi
+ * 
+ * Type '3' - SOS (Lamp → HQ)
+ *   From: Any lamp node
+ *   To: HQ (000h)
+ *   Purpose: Emergency alert to headquarters (button press)
+ *   Example: "HELP!" - routes silently to HQ via mesh
+ *   Action: Routes to HQ only, NO phone broadcast (HQ coordinates response)
+ *   Note: HQ can then send Type 1 or Type 2 to inform people if appropriate
+ * 
+ * Type '4' - MESSAGE (Node → HQ)
+ *   From: Any node
+ *   To: HQ (000h)
+ *   Purpose: Normal messages/reports to HQ (non-emergency)
+ *   Example: "Battery low", "Temperature 25C", general status
+ *   Action: HQ logs message, no special alert
+ */
+
+#define MSG_TYPE_BROADCAST '1'  // HQ → All lamps (all broadcast to phones)
+#define MSG_TYPE_TARGETED  '2'  // HQ → Specific lamp (only it broadcasts to phones)
+#define MSG_TYPE_SOS       '3'  // Lamp → HQ (emergency, special alert)
+#define MSG_TYPE_MESSAGE   '4'  // Node → HQ (normal message)
+
 // ==================== DATA STRUCTURES ====================
 
 /*
@@ -232,12 +272,14 @@ bool irReceive(String &header, String &message){
 
 /*
  * Generate SOS Emergency Message
- * Creates and sends emergency alert to HQ with pre-computed hash
- * Also updates LiFi broadcast message for local phone receivers
+ * Sends emergency alert to HQ via mesh (Type 3)
+ * Does NOT broadcast to phones - only routes to HQ for coordination
  * 
- * SOS Flow:
- *   1. Send to HQ via mesh (for central monitoring)
- *   2. Broadcast to local phones via LiFi (for nearby people)
+ * Message Flow:
+ *   1. Send Type 3 (SOS) to HQ via mesh routing
+ *   2. Intermediate nodes forward it (mesh behavior)
+ *   3. HQ receives and processes emergency alert
+ *   4. HQ can then send Type 1 or Type 2 to broadcast info to phones if needed
  */
 void generateSOS(){
   String msg = SOS_MESSAGE;  // "HELP!"
@@ -246,23 +288,18 @@ void generateSOS(){
   char hashStr[5];
   sprintf(hashStr, "%04X", h);
 
-  // Send SOS to HQ (not broadcast - targeted delivery)
-  String header = String(NODE_ID) + HQ_ID + "3" + String(hashStr);
-  //                                 ^^^^^
-  //                                 Destination: HQ only
+  // Build header: Type 3 = SOS, destination = HQ
+  String header = String(NODE_ID) + HQ_ID + MSG_TYPE_SOS + String(hashStr);
 
   isNew(NODE_ID, h);  // Add to cache to prevent re-forwarding own SOS
-  irSend(header, msg);  // Send via IR mesh to HQ
+  irSend(header, msg);  // Send via IR mesh to HQ (no LiFi broadcast)
 
-  // Update LiFi broadcast message for local phones
-  latestLiFiMessage = msg;
-  lastLiFiBroadcastTime = millis();
-  lifiTransmit(msg);  // Immediately broadcast to nearby phones
-
-  // Visual feedback
+  // Visual feedback only - NO LiFi broadcast for SOS
   digitalWrite(LED_STATUS, HIGH);
   delay(200);
   digitalWrite(LED_STATUS, LOW);
+  
+  Serial.println("SOS sent to HQ (no phone broadcast)");
 }
 
 /*
@@ -271,19 +308,16 @@ void generateSOS(){
  * Core mesh networking function:
  *   1. Validates header format
  *   2. Verifies message integrity (hash check)
- *   3. Deduplicates and forwards new messages via IR mesh
- *   4. Processes messages addressed to this node or broadcast
- *   5. Updates LiFi broadcast message if relevant to local area
+ *   3. Forwards ALL messages via mesh (routing to destination)
+ *   4. Processes messages based on type and destination
  * 
  * Header Format (13 chars): [src(4)][dst(4)][type(1)][hash(4)]
  * 
- * Message Types (for future expansion):
- *   '1' - General data message
- *   '2' - Command/control message
- *   '3' - SOS emergency alert
- *   '4' - Status update
- *   '5' - Sensor data
- *   (More types can be added as needed)
+ * Message Type Processing:
+ *   Type 1 (BROADCAST): HQ → All lamps, all nodes process
+ *   Type 2 (COMMAND): HQ → Specific lamp, only destination processes
+ *   Type 3 (SOS): Lamp → HQ, only HQ processes (emergency alert)
+ *   Type 4 (DATA): Node → HQ or Node → Node, destination processes
  */
 void forwardPacket(String header, String message){
   // Validate header
@@ -300,59 +334,88 @@ void forwardPacket(String header, String message){
   uint16_t receivedHash = (uint16_t) strtol(hashStr.c_str(), NULL, 16);
 
   // Verify integrity: recompute hash and compare
-  // If hashes don't match, message was corrupted - discard it
-  // If they match, message is good - continue processing
   uint16_t computedHash = simpleHash(message);
   if(computedHash != receivedHash){
     Serial.println("Corrupted message (hash mismatch) - discarded");
     return;  // Exit early, don't process bad data
   }
 
-  // Message integrity verified, now forward if new via IR mesh
-  // All nodes forward messages to help route to destination (mesh behavior)
+  // STEP 1: Forward via mesh (all nodes help route messages)
   if(isNew(src, receivedHash)){
     // Optional: Uncomment next line if collision issues observed
     // delay(random(10, 100));  // Random backoff reduces collision probability
     
     irSend(header, message);
-
     digitalWrite(LED_STATUS, HIGH);
     delay(50);
     digitalWrite(LED_STATUS, LOW);
   }
 
-  // Process if message is for this node or broadcast
-  if(dst == NODE_ID || dst == BROADCAST_ID){
-    Serial.print("From "); 
-    Serial.print(src);
-    Serial.print(": "); 
+  // STEP 2: Process message based on type and destination
+  
+  // Type 1: BROADCAST (HQ → All) - All nodes process
+  if(type == MSG_TYPE_BROADCAST && dst == BROADCAST_ID){
+    Serial.println("=== BROADCAST FROM HQ ===");
+    Serial.print("Message: ");
     Serial.println(message);
     
-    // Update latest message for LiFi rebroadcast to phones
+    // All nodes broadcast to phones
     latestLiFiMessage = message;
-    lastLiFiBroadcastTime = millis();  // Reset rebroadcast timer
-    
-    // Immediately broadcast to phones via LiFi
+    lastLiFiBroadcastTime = millis();
     lifiTransmit(message);
   }
   
-  // Special handling: If this node IS the HQ, process SOS messages
-  if(NODE_ID == HQ_ID && dst == HQ_ID && type == '3'){
-    Serial.println(">>> HQ: SOS ALERT RECEIVED <<<");
-    Serial.print(">>> From Node: "); Serial.println(src);
-    Serial.print(">>> Message: "); Serial.println(message);
-    // HQ can add additional processing here (log, alarm, relay to emergency services)
+  // Type 2: COMMAND (HQ → Specific lamp) - Only destination processes
+  else if(type == MSG_TYPE_TARGETED && dst == NODE_ID){
+    Serial.println("=== MESSAGE FROM HQ ===");
+    Serial.print("Message: ");
+    Serial.println(message);
+    
+    // Only this node broadcasts to phones
+    latestLiFiMessage = message;
+    lastLiFiBroadcastTime = millis();
+    lifiTransmit(message);
+    
+    // Add command processing here (e.g., parse commands)
+  }
+  
+  // Type 3: SOS (Lamp → HQ) - Only HQ processes with special alert
+  else if(type == MSG_TYPE_SOS && dst == HQ_ID && NODE_ID == HQ_ID){
+    Serial.println("╔════════════════════════════╗");
+    Serial.println("║   SOS ALERT RECEIVED       ║");
+    Serial.println("╚════════════════════════════╝");
+    Serial.print("From Node: "); Serial.println(src);
+    Serial.print("Message: "); Serial.println(message);
+    Serial.println("────────────────────────────");
+    
+    // HQ: Trigger alarm, log emergency, coordinate response
+  }
+  
+  // Type 4: MESSAGE (Node → HQ) - HQ processes as normal message
+  else if(type == MSG_TYPE_MESSAGE && dst == HQ_ID && NODE_ID == HQ_ID){
+    Serial.println("=== Message from Node ===");
+    Serial.print("From: "); Serial.println(src);
+    Serial.print("Message: "); Serial.println(message);
+    
+    // HQ logs/displays message (no special alert, just normal info)
   }
 }
 
 // ==================== SETUP ====================
 
 void setup(){
+  // Initialize hardware pins
   pinMode(SOS_PIN, INPUT_PULLUP);
   pinMode(IR_TX_PIN, OUTPUT);
   pinMode(IR_RX_PIN, INPUT);
   pinMode(LED_STATUS, OUTPUT);
   pinMode(LAMP_LIGHT_PIN, OUTPUT);
+
+  // Initialize cache to empty state (prevent garbage data)
+  for(int i = 0; i < CACHE_SIZE; i++){
+    cache[i].src = "";
+    cache[i].msgHash = 0;
+  }
 
   Serial.begin(115200);
   Serial.println("\n=== LiFi Mesh Lamp Node ===");
