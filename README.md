@@ -1,125 +1,181 @@
-# Disaster-Resilient LiFi Mesh Communication System
+# Disaster-Resilient LiFi Communication System
 
-A LiFi-based street-lamp mesh network designed to maintain communication during disasters — completely off-grid, powered by solar lamps, and capable of forwarding emergency messages lamp-to-lamp using light.
+Off-grid emergency mesh network using solar street lamps and infrared communication. Built for CBSE Regional Science Exhibition 2025-26.
 
----
+## Problem
 
-## 🌍 Overview
+Power grids and mobile networks fail simultaneously during natural disasters. Communities lose contact with rescue teams when they need it most.
 
-When mobile networks fail during floods, cyclones, or earthquakes, communities lose contact with rescue teams and vital information.  
-This project proposes **transforming solar street lamps into LiFi communication nodes** — creating a self-contained, optical mesh network that stays operational even without internet or electricity.
+## Solution
 
----
+Retrofit solar street lamps with IR transceivers to create a disaster-resilient mesh network. Each lamp forwards emergency messages hop-by-hop using light, operates entirely off-grid, and routes SOS alerts to headquarters using gradient-based routing.
 
-## 🚨 Problem Statement
+**Protocol:** LiFi (IEEE 802.11bgn standard, includes IR). IR chosen for mesh backbone due to lower power, no visible flicker, mature TSOP receivers, and built-in sunlight filtering via 38kHz AC modulation.
 
-During natural disasters, power grids and mobile networks often collapse, leaving communities disconnected and uninformed.  
-A **low-cost, infrastructure-independent** communication channel is essential for maintaining situational awareness and coordination between citizens and responders.
+## How It Works
 
----
+### Gradient Routing
 
-## 💡 Proposed Solution
+The network uses distance gradients instead of routing tables. HQ sends INIT packets that propagate outward, building a hop-count map. Messages then flow "downhill" toward HQ using decreasing hop counts.
 
-Each street lamp becomes a **LiFi node** capable of sending and receiving encoded signals through infrared and visible light.
+**Example:** Lamp4 (hop=5) → Lamp3 (hop=4) → Lamp2 (hop=3) → HQ (hop=0)
 
-- **LiFi mesh:** Lamps forward messages from one to another via light, forming a resilient optical network.  
-- **Broadcast capability:** Important alerts can be transmitted directly to people’s phones using a simple optical receiver or dongle.  
-- **Solar-powered:** Operates entirely off-grid, running on its own battery and solar cell.
+For detailed routing logic, topology examples, and protocol specifications, see [project_report.pdf](docs/project_report.pdf).
 
----
+### Message Types
 
-## ⚙️ How the System Works (High-Level)
+| Type | Direction | Purpose | Header Format |
+|------|-----------|---------|---------------|
+| 0 | HQ → All | Build gradient map | `[src][id][hop][0]` (9 chars) |
+| 1 | HQ → All | Broadcast alert | `[src][dst][1][hash]` (13 chars) |
+| 2 | HQ → One | Targeted alert | `[src][dst][2][hash]` (13 chars) |
+| 3 | Lamp → HQ | SOS emergency | `[src][dst][3][hop]` (11 chars) |
+| 4 | Node → HQ | Status message | `[src][dst][4][hash][hop]` (15 chars) |
 
-**Nodes:**
-- **Lamp Node:** Forwards messages, deduplicates using a per-source hash cache, and can generate SOS alerts.  
-- **Router Node (optional):** Extends reach with caching and temporary storage.  
-- **HQ Node:** Acts as a control center — logs messages, displays them, and injects broadcasts into the mesh.
+Types 3 & 4 use gradient routing. Types 1 & 2 flood the network.
 
-**Message Flow:**
-1. An SOS button press on a lamp node generates a message packet (`header + data`).  
-2. Lamps forward it hop-by-hop through LiFi (optical IR).  
-3. Each node caches recently seen messages to avoid loops or duplication.  
-4. The HQ node logs received messages and can broadcast system alerts across the mesh.
+### Reliability
 
-**Modes of Operation:**
-- **Off-grid:** No dependency on the internet or RF links for the mesh core.  
-- **Store-and-forward:** Messages are cached and retried if nodes are temporarily offline or unreachable.
+- **Deduplication cache:** Prevents forwarding loops using (source, hash) pairs
+- **Automatic retransmission:** 2-3 redundant sends in first minute, no ACKs needed
+- **Four-directional broadcast:** Coverage regardless of lamp orientation
 
----
+## Hardware
 
-## 🧱 Design Decisions and Caveats
+### IR Transmitter Circuit (per direction)
 
-**Core Design Choices**
-- Pure optical LiFi for the demo — no Wi-Fi or RF in the main communication layer.  
-- Uniform node architecture across Lamp Nodes; Router adds memory and caching.  
-- SOS button includes cooldown to prevent spam and simulate real operational constraints.  
-- HQ interacts with the mesh purely via optical LiFi.
+```
+NodeMCU GPIO (D2/D3/D0/D7) 
+    → 2.2kΩ resistor 
+    → NPN transistor base (2N2222)
+    → Collector connects to:
+        → 2-3x IR LEDs (940nm) in series
+        → 100Ω current-limiting resistor
+        → 5V supply
+    → Emitter to GND
+```
 
-**Demo Limitations**
-- Tabletop-scale prototype (5 nodes).  
-- No strong ACK or retransmission mechanisms — minor data loss possible.  
-- Minimal security (intentionally omitted for clarity and speed).  
-- IR timing and framing are placeholder-level; real LiFi modulation planned for next phase.
+**Why 4 separate pins?** Prevents exceeding single GPIO current limit (~12mA). Hardware can use omnidirectional setup with single amplifier.
 
-**Security Stance**
-- Security deprioritized for the demo phase.  
-- Real deployments will add integrity checks and authentication to prevent spoofing or false messages.
+### IR Receiver Circuit
 
----
+```
+TSOP38238 IR Receiver
+    VCC → 3.3V
+    GND → GND
+    OUT → NodeMCU GPIO (D5)
+```
 
-## 🧩 Design Challenges & Mitigations
+**Why 38kHz?** Low cost, faster data rates, readily available receivers, AC modulation filters DC sunlight interference.
 
-| # | Problem / Challenge | Solution / Mitigation | Notes / Derived |
-|---|----------------------|-----------------------|-----------------|
-| 1 | Message duplication & loops in IR mesh | Implemented cache with circular buffer (`CACHE_SIZE=3`) and sender-hash deduplication | Ensures messages are forwarded only once |
-| 2 | SOS button spam / accidental multiple presses | Edge detection + cooldown (`SOS_COOLDOWN=3min`) | Prevents repeated SOS from same node |
-| 3 | Message integrity / corruption | Added 16-bit polynomial hash for each message | Messages with hash mismatch are discarded |
-| 4 | Collisions / simultaneous forwarding | Optional random backoff before forwarding | Helps reduce IR collisions |
-| 5 | Hash recomputation overhead for SOS | Precomputed SOS hash (`SOS_HASH`) | Avoids unnecessary CPU cycles |
-| 6 | Lamp-to-phone LiFi: message missed if no people | Periodic repeat of latest broadcast (every 1 min) using `millis()` | Ensures eventual reception; non-blocking |
-| 7 | Header format & parsing consistency | Fixed 13-character header `[src(4)][dst(4)][type(1)][hash(4)]` | Standardizes message structure |
-| 8 | Lamp light / LiFi placeholder | `LAMP_LIGHT_PIN` used for visual transmission | Upgradable to actual LiFi driver later |
-| 9 | Potential IR message loss due to delays | Recommended: short bursts + framing markers | Improves reliability in scaled deployments |
-| 10 | Cache size for small-scale demo | Set `CACHE_SIZE=3` (enough for 5-node mesh) | Balances reliability and memory footprint |
-| 11 | HQ not directly in mesh | Defined HQ as separate node; receives via hops | Matches final system design and documentation |
+### SOS Button (Lamp nodes only)
 
----
+```
+Push button between GPIO (D6) and GND
+Internal pull-up resistor enabled (INPUT_PULLUP)
+```
 
-## 🧭 Next Steps / To-Do
+### Complete Node BOM
 
-| Task | Description | Priority |
-|------|--------------|-----------|
-| 💡 LiFi-to-Phone Communication | Implement visible-light modulation for direct alerts to phone receivers or dongles. | Medium |
-| 🧩 Node Role Implementation | Adapt current node skeleton into three role variants: Lamp Node, Router Node, and HQ Node. | High |
-| 🔐 Lightweight Security Layer | Add checksum or lightweight encryption for real-world deployments. | Low |
-| 📖 Extended Documentation | Add diagrams, wiring schematics, and setup notes under `/hardware` and `/docs`. | Medium |
+- NodeMCU ESP8266
+- TSOP38238 IR receiver (38kHz)
+- 2N2222 NPN transistor (×4 for 4 directions)
+- IR LEDs 940nm (×8-12, 2-3 per direction)
+- 100Ω resistor (×4 for LED current limiting)
+- 2.2kΩ resistor (×4 for transistor base)
+- 220Ω resistor (×1 for status LED)
+- Push button (×1 for SOS)
+- Breadboard + jumper wires
+- Power: USB or 3.7V battery (solar in production)
 
----
+### Performance
 
-## Important Technical Notes
+- **Demo range:** ~20cm (tabletop exhibition)
+- **Production range:** 50m+ with amplifiers and focusing lenses
+- **Latency:** 1-2 seconds per hop
+- **Tested:** 5-hop chains, stable indoor operation
+- **Protocol:** NEC IR via IRremote library
 
-1. Message Timing & Reliability
+## Building It
 
-A potential issue in LiFi/IR transmission is that if a node is busy or delayed, it may miss part of a message (header or data).
-In a small-scale demo, this is unlikely to occur, but in real deployments, this can be mitigated by:
+### 1. Flash Node Firmware
 
-Sending data in small bursts or bytes
+```bash
+# Install Arduino IDE + ESP8266 board support
+# Install IRremote library
 
-Using start/stop markers to frame each message
+# Edit config.h for each node
+#define NODE_ID "102a"        # Unique 4-char ID
+#define HQ_ID "000h"          # Headquarters address
 
-Maintaining precise transmission timing to ensure no bits are lost
+# Upload to ESP8266
+arduino --upload main.ino --port /dev/ttyUSB0
+```
 
-2. ACKs / Retransmission
+### 2. Wire the Hardware
 
-Acknowledgments mechanisms are not needed for the prototype, as the mesh structure itself provides redundancy — messages are relayed by multiple paths but re-transmission is added.
-For larger or more critical networks, ACK-based delivery confirmation can be added later if required.
+Follow circuit diagrams above. Use separate GPIO pins for each IR transmitter direction.
 
-3. Security
+### 3. Start HQ Dashboard
 
-Security features (encryption, authentication) are not necessary for the disaster-response demo, since the system operates in a controlled, emergency-use environment.
-For real-world deployment, lightweight encryption and message verification can be implemented to prevent spoofing or unauthorized access.
+```bash
+cd src/hq/lifi\ hq/code
+pip install flask flask-socketio pyserial
+python app.py
+```
 
-4. Memory Optimization (For Production)
+Open http://localhost:5000
 
-Current firmware uses Arduino String objects for clarity during prototyping.
-In long-term or low-RAM deployments, replace all dynamic String usage with fixed-size char[] C-strings and safe functions (snprintf, strcmp, etc.) to prevent heap fragmentation and improve determinism.
+### 4. Run 3-Node Demo
+
+1. Flash 3 ESP8266s with IDs: `000h` (HQ), `101a`, `102a`
+2. Connect HQ to computer via USB
+3. Click "Connect Arduino" in dashboard
+4. Send `INIT|01` to build gradient map (wait 5-10s)
+5. Press SOS button on `102a`
+6. Verify "SOS from 102a" in dashboard
+
+**Expected:** Single hop 1-2s, 5-hop chain 5-10s, zero duplicates.
+
+## Current Status
+
+- 3-5 node mesh with stable forwarding
+- Gradient routing with automatic path selection
+- SOS alerts route to HQ
+- Real-time dashboard monitoring
+- Four-directional IR broadcast
+
+## Protocol Limitations
+
+- No encryption (add for production deployment)
+- Basic hash integrity (not cryptographically secure)
+- Manual INIT required to rebuild gradient after topology changes
+- Sequential transmission (not concurrent)
+- 5-node maximum tested
+
+## Code Structure
+
+```
+├── src/
+│   ├── hq/                      # Headquarters node
+│   │   ├── arduino/main/        # ESP8266 firmware
+│   │   └── code/                # Flask dashboard
+│   └── lamp/                    # Lamp node firmware
+└── structure/v3/upg/            # Latest protocol version
+    ├── config.h                 # Pin assignments, timing, node ID
+    ├── ir.h                     # IR communication layer
+    ├── lifi.h                   # Routing and protocol logic
+    └── main.ino                 # Main event loop
+```
+
+**config.h** → Change node ID, pins, timing constants, protocol parameters  
+**ir.h** → Handles NEC IR protocol (swap this file to use LoRa, RF, or other physical layers)  
+**lifi.h** → Gradient routing, message processing, caching  
+**main.ino** → Button handling, message forwarding, retransmission
+
+**To use different communication technology:** Replace `ir.h` with your implementation. Keep function signatures: `irInit()`, `irSendString()`, `irReceiveString()`. Protocol layer stays the same.
+
+## Full Documentation
+
+See [project_report.pdf](docs/project_report.pdf) for complete technical documentation, circuit details, testing methodology, and references.
+
